@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Huffman File Compressor/Decompressor</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    /* Global Styles */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: 'Roboto', sans-serif;
+      background: linear-gradient(135deg, #74ABE2, #5563DE);
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: #fff;
+      border-radius: 10px;
+      padding: 30px;
+      max-width: 900px;
+      width: 100%;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+      color: #444;
+    }
+    .section {
+      margin-bottom: 40px;
+    }
+    .section h2 {
+      margin-bottom: 15px;
+      color: #333;
+      text-align: center;
+    }
+    input[type="file"] {
+      display: block;
+      margin: 10px auto 15px;
+    }
+    button {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border: none;
+      border-radius: 5px;
+      background: #5563DE;
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.3s ease;
+      margin: 10px 0 20px;
+    }
+    button:hover {
+      background: #3e4cb8;
+    }
+    textarea {
+      width: 100%;
+      padding: 12px;
+      margin-bottom: 15px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      font-size: 16px;
+      resize: vertical;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>Huffman File Compressor/Decompressor</h1>
+  
+  <!-- Compression Section -->
+  <div class="section" id="compressionSection">
+    <h2>Compress a File</h2>
+    <input type="file" id="inputFile" accept=".txt">
+    <button onclick="handleCompress()">Compress File</button>
+    <h3>Original File Content:</h3>
+    <textarea id="originalContent" rows="6" readonly></textarea>
+    <h3>Encoded Data (Bit Stream):</h3>
+    <!-- Only the pure 0's and 1's bit stream is displayed here -->
+    <textarea id="encodedData" rows="6" readonly></textarea>
+    <button onclick="downloadEncoded()">Download Encoded File (Binary)</button>
+  </div>
+  
+  <!-- Decompression Section -->
+  <div class="section" id="decompressionSection">
+    <h2>Decompress a File</h2>
+    <input type="file" id="encodedFile" accept=".bin">
+    <button onclick="handleDecompress()">Decompress File</button>
+    <h3>Decoded File Content:</h3>
+    <textarea id="decodedContent" rows="6" readonly></textarea>
+    <button onclick="downloadDecoded()">Download Decoded File</button>
+  </div>
+</div>
+
+<!-- Hidden anchor for download -->
+<a id="downloadLink" style="display:none;"></a>
+
+<script>
+  // Global variable to store the full compressed object (includes frequency table, etc.)
+  let fullCompressedObj = null;
+
+  // Huffman Node Constructor
+  function Node(char, freq, left = null, right = null) {
+    this.char = char;
+    this.freq = freq;
+    this.left = left;
+    this.right = right;
+  }
+
+  // Build frequency table from a string
+  function buildFrequencyTable(str) {
+    const freq = {};
+    for (let char of str) {
+      freq[char] = (freq[char] || 0) + 1;
+    }
+    return freq;
+  }
+
+  // Build Huffman tree from frequency table
+  function buildHuffmanTree(freqTable) {
+    const nodes = [];
+    for (let char in freqTable) {
+      nodes.push(new Node(char, freqTable[char]));
+    }
+    while (nodes.length > 1) {
+      nodes.sort((a, b) => a.freq - b.freq);
+      const left = nodes.shift();
+      const right = nodes.shift();
+      const newNode = new Node(null, left.freq + right.freq, left, right);
+      nodes.push(newNode);
+    }
+    return nodes[0];
+  }
+
+  // Generate Huffman codes by traversing the tree
+  function generateCodes(node, prefix = '', codeMap = {}) {
+    if (!node) return;
+    if (node.char !== null) {
+      codeMap[node.char] = prefix;
+    }
+    generateCodes(node.left, prefix + '0', codeMap);
+    generateCodes(node.right, prefix + '1', codeMap);
+    return codeMap;
+  }
+
+  // Encode string using the Huffman code map
+  function huffmanEncode(str, codeMap) {
+    let encoded = '';
+    for (let char of str) {
+      encoded += codeMap[char];
+    }
+    return encoded;
+  }
+
+  // Decode an encoded bit string using the Huffman tree
+  function huffmanDecode(encodedStr, tree) {
+    let decoded = '';
+    let node = tree;
+    for (let bit of encodedStr) {
+      node = (bit === '0') ? node.left : node.right;
+      if (node.char !== null) { // leaf reached
+        decoded += node.char;
+        node = tree;
+      }
+    }
+    return decoded;
+  }
+
+  // Pack a bit string (e.g., "010101...") into an array of bytes (numbers)
+  function packBitString(bitStr) {
+    const byteArray = [];
+    for (let i = 0; i < bitStr.length; i += 8) {
+      let byte = bitStr.substr(i, 8);
+      if (byte.length < 8) {
+        byte = byte.padEnd(8, '0'); // pad last byte with zeros if necessary
+      }
+      byteArray.push(parseInt(byte, 2));
+    }
+    return byteArray;
+  }
+
+  // Unpack an array of bytes back to a bit string; trim to original bit length
+  function unpackByteArray(byteArray, bitLength) {
+    let bitStr = "";
+    for (let i = 0; i < byteArray.length; i++) {
+      let bits = byteArray[i].toString(2).padStart(8, '0');
+      bitStr += bits;
+    }
+    return bitStr.substr(0, bitLength);
+  }
+
+  // Compress file content using Huffman Coding.
+  // Returns an object with frequency table, original bit length, encoded byte array, and raw encoded bit string.
+  function compressData(content) {
+    const freqTable = buildFrequencyTable(content);
+    const tree = buildHuffmanTree(freqTable);
+    const codeMap = generateCodes(tree);
+    const encodedStr = huffmanEncode(content, codeMap);
+    const bitLength = encodedStr.length; // store original bit length
+    const packedBytes = packBitString(encodedStr); // pack bits into bytes
+    return { freq: freqTable, bitLength: bitLength, encoded: packedBytes, rawEncoded: encodedStr };
+  }
+
+  // Pack our compressed data object into a binary ArrayBuffer.
+  // Format:
+  // [4 bytes: numChars] + [for each char: (1 byte char, 4 bytes frequency)] +
+  // [4 bytes: bitLength] + [4 bytes: encodedArrayLength] + [encoded bytes]
+  function packBinaryData(dataObj) {
+    const keys = Object.keys(dataObj.freq);
+    const numChars = keys.length;
+    const freqTableSize = numChars * 5; // each entry: 1 byte char + 4 bytes frequency
+    const encodedArrayLength = dataObj.encoded.length;
+    const totalSize = 4 + freqTableSize + 4 + 4 + encodedArrayLength;
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+    let offset = 0;
+    // Write number of distinct characters (4 bytes)
+    view.setUint32(offset, numChars);
+    offset += 4;
+    // Write frequency table entries
+    for (const char of keys) {
+      view.setUint8(offset, char.charCodeAt(0));
+      offset += 1;
+      view.setUint32(offset, dataObj.freq[char]);
+      offset += 4;
+    }
+    // Write original bit length (4 bytes)
+    view.setUint32(offset, dataObj.bitLength);
+    offset += 4;
+    // Write length of encoded byte array (4 bytes)
+    view.setUint32(offset, encodedArrayLength);
+    offset += 4;
+    // Write the encoded bytes
+    for (let i = 0; i < encodedArrayLength; i++) {
+      view.setUint8(offset, dataObj.encoded[i]);
+      offset++;
+    }
+    return buffer;
+  }
+
+  // Unpack the binary file and decompress using stored data
+  function decompressDataFromBuffer(buffer) {
+    const view = new DataView(buffer);
+    let offset = 0;
+    // Read number of distinct characters (4 bytes)
+    const numChars = view.getUint32(offset);
+    offset += 4;
+    const freqTable = {};
+    for (let i = 0; i < numChars; i++) {
+      const charCode = view.getUint8(offset);
+      offset += 1;
+      const frequency = view.getUint32(offset);
+      offset += 4;
+      freqTable[String.fromCharCode(charCode)] = frequency;
+    }
+    // Read original bit length (4 bytes)
+    const bitLength = view.getUint32(offset);
+    offset += 4;
+    // Read length of encoded byte array (4 bytes)
+    const encodedArrayLength = view.getUint32(offset);
+    offset += 4;
+    const encoded = [];
+    for (let i = 0; i < encodedArrayLength; i++) {
+      encoded.push(view.getUint8(offset));
+      offset++;
+    }
+    // Rebuild Huffman tree and decode.
+    const tree = buildHuffmanTree(freqTable);
+    const bitStr = unpackByteArray(encoded, bitLength);
+    const decoded = huffmanDecode(bitStr, tree);
+    return decoded;
+  }
+
+  // Handle file compression process
+  function handleCompress() {
+    const fileInput = document.getElementById('inputFile');
+    if (fileInput.files.length === 0) {
+      alert("Please select a text file to compress.");
+      return;
+    }
+    const file = fileInput.files[0];
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const content = e.target.result;
+      document.getElementById('originalContent').value = content;
+      const compressed = compressData(content);
+      // Store full compressed object globally for binary download.
+      fullCompressedObj = compressed;
+      // Display only the raw encoded bit string (e.g., "0101010101") in the UI.
+      document.getElementById('encodedData').value = compressed.rawEncoded;
+    };
+    reader.readAsText(file);
+  }
+
+  // Handle file decompression process from a binary file
+  function handleDecompress() {
+    const fileInput = document.getElementById('encodedFile');
+    if (fileInput.files.length === 0) {
+      alert("Please select a binary encoded file to decompress.");
+      return;
+    }
+    const file = fileInput.files[0];
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const buffer = e.target.result;
+        const decoded = decompressDataFromBuffer(buffer);
+        document.getElementById('decodedContent').value = decoded;
+      } catch (err) {
+        alert("Error processing the encoded file. Please ensure it is valid.");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // Helper function to trigger download of a file (binary data)
+  function downloadFile(data, filename, type) {
+    const file = new Blob([data], { type: type });
+    const downloadLink = document.getElementById('downloadLink');
+    downloadLink.href = URL.createObjectURL(file);
+    downloadLink.download = filename;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(downloadLink.href);
+      downloadLink.removeAttribute('href');
+    }, 0);
+  }
+
+  // Download the encoded file as a binary file (using the global compressed object)
+  function downloadEncoded() {
+    if (!fullCompressedObj) {
+      alert("No encoded data available. Please compress a file first.");
+      return;
+    }
+    const buffer = packBinaryData(fullCompressedObj);
+    downloadFile(buffer, "encoded_file.bin", "application/octet-stream");
+  }
+
+  // Download the decoded text file
+  function downloadDecoded() {
+    const decodedData = document.getElementById('decodedContent').value;
+    if (!decodedData) {
+      alert("No decoded content available. Please decompress a file first.");
+      return;
+    }
+    downloadFile(decodedData, "decoded_file.txt", "text/plain");
+  }
+</script>
+</body>
+</html>
